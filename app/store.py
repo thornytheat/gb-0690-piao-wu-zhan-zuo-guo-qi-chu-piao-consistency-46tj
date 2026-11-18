@@ -1,6 +1,7 @@
 import os,sqlite3,json
 from pathlib import Path
 from app.errors import DomainError
+from app.normalize import serial
 def connection():
     path=Path(os.environ.get("DATA_DIR","data"));path.mkdir(parents=True,exist_ok=True)
     db=sqlite3.connect(path/"runs.sqlite",timeout=15)
@@ -26,3 +27,23 @@ def review(run_id,version,decision):
         cur=db.execute("UPDATE runs SET review=?,version=version+1 WHERE id=? AND version=?",(decision,run_id,version))
         if cur.rowcount!=1: raise DomainError("STALE","复核版本已更新",409)
     return fetch(run_id)
+def backfill(run_id,version,backfills,orders,plans):
+    if not isinstance(version,int): raise DomainError("STALE","版本必须为整数")
+    # 乐观锁：版本不一致时整次补位拒绝，旧版状态原样保留，不产生半张补位凭证。
+    with connection() as db:
+        row=db.execute("SELECT payload,version FROM runs WHERE id=?",(run_id,)).fetchone()
+        if row is None: raise DomainError("NOT_FOUND","批次不存在",404)
+        if row["version"]!=version: raise DomainError("STALE","批次版本已更新，请刷新后重跑",409)
+        payload=json.loads(row["payload"])
+        existing={item["ticket"] for item in payload.get("backfills",[])}
+        added=[item for item in backfills if item["ticket"] not in existing]
+        if added:
+            payload.setdefault("backfills",[]).extend(added)
+            payload["orders"]=orders
+            payload["backfill_plans"]=plans
+            db.execute("UPDATE runs SET payload=?,version=version+1 WHERE id=? AND version=?",
+                       (json.dumps(serial(payload),ensure_ascii=False),run_id,version))
+        else:
+            # 重跑没有缺失座位：确认幂等成功，不重复出票、不推进版本。
+            payload=json.loads(row["payload"])
+    return fetch(run_id),added

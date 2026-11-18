@@ -15,6 +15,7 @@
 | M5 出票核验 | 检查支付及票号一致 | `/api/m5` | `app/modules/m5_tickets/rules.py` `app/modules/m5_tickets/service.py` | `tests/test_m5_tickets.py` |
 | M6 渠道对账 | 核对渠道金额与悬单 | `/api/m6` | `app/modules/m6_reconcile/rules.py` `app/modules/m6_reconcile/service.py` | `tests/test_m6_reconcile.py` |
 | M7 补传复核 | 补传回放和版本复核 | `/api/m7` | `app/modules/m7_replay/rules.py` `app/modules/m7_replay/service.py` | `tests/test_m7_replay.py` |
+| M8 团购补位 | 同订单补位、幂等重跑与三方核对 | `/api/m8` `/api/backfill/<run_id>` | `app/modules/m8_backfill/rules.py` `app/modules/m8_backfill/service.py` `app/store.py` | `tests/test_m8_backfill.py` |
 
 ## 陷阱登记
 
@@ -28,6 +29,9 @@
 | TRAP-14 | 同版冲突 | 覆盖或重复售卖 | 事件时间回放并保留隔离证据 | `app/modules/m2_seats/rules.py` | `tests/test_m2_seats.py::test_real_conflict` |
 | TRAP-23 | 过期端点 | 覆盖或重复售卖 | 事件时间回放并保留隔离证据 | `app/modules/m3_leases/rules.py` | `tests/test_m3_leases.py::test_expiration_endpoint_reusable` |
 | TRAP-26 | 陈旧复核 | 覆盖或重复售卖 | 事件时间回放并保留隔离证据 | `app/store.py` | `tests/test_m7_replay.py::test_stale_review` |
+| TRAP-31 | 部分出票订单误判完成 | 补位换座后重复生成有效凭证 | 同订单聚合应出票/原票/补位，补位按旧座席计覆盖，乐观锁+票号唯一保证重跑幂等 | `app/modules/m8_backfill/rules.py` `app/store.py` | `tests/test_m8_backfill.py::test_execute_backfill_completes_order_and_is_idempotent` |
+| TRAP-32 | 自动补位占走进期受阻座席 | 未结清订单被静默换走座席 | 空闲座席排除有效租约与受阻订单座席，仅补偿有有效支付的缺失座位 | `app/modules/m8_backfill/rules.py` | `tests/test_m8_backfill.py::test_auto_target_never_takes_blocked_order_seat` |
+| TRAP-33 | 补位失败覆盖旧版状态 | 失败后丢失可追溯版本 | 版本不符409且不写库，无新增凭证不推进版本 | `app/store.py::backfill` | `tests/test_m8_backfill.py::test_stale_version_keeps_old_state` |
 
 ## 对账规则
 
@@ -37,3 +41,5 @@
 ## 已知不覆盖
 
 单场演出16个座席，不处理退票退款。占座租约释放或到期后，迟到付款不能恢复租约；出票必须已有有效付款且座席不可重复出票。
+
+补位不处理无有效支付的受阻座位（需先补齐支付证据），不跨渠道移动金额，不拆分或合并订单；补位凭证不回写原始CSV事件流，只在批次 `backfills` 集合与补位导出中留痕。
